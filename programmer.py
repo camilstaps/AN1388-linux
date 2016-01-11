@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 """Implementation of Microchip's AN1388 on Linux using UART"""
 
+from __future__ import print_function
+
 import sys
 import os
+
 import serial
 import argparse
 import binascii
@@ -73,6 +76,19 @@ def escape(data):
     data = data.replace('\x04', '\x10\x04')
     return data
 
+def unescape(data):
+    escape = False
+    record = ''
+    for c in list(data):
+        if escape:
+            record += c
+            escape = False
+        elif c == '\x10':
+            escape = True
+        else:
+            record += c
+    return record
+
 def send_request(serial, command, wait=True):
     """Send a command over a serial port"""
     command = escape(command)
@@ -81,29 +97,39 @@ def send_request(serial, command, wait=True):
     request = '\x01' + command + escape(crc16(command)) + '\x04'
     serial.write(request)
 
-def read_response(serial, command, size=0):
+def read_response(serial, command):
     """Read the response from the serial port"""
-    response = ser.read(5 + size)
+    response = ''
+    r = ser.read(1)
+    while r != '\x01':
+        r = ser.read(1)
+    while r != '\x04' or len(response) == 0 or response[-1] == '\x10':
+        response += r
+        r = ser.read(1)
+    response += r
 
-    # Verify SOH, EOT and command fields
-    # @todo: CRC check
-    if len(response) != 5 + size:
-        raise IOError('Timeout')
-    if response[:1] != '\x01' or \
-            response[-1:] != '\x04' or \
-            response[1:1] != command:
+    if response[0] != '\x01' or response[-1] != '\x04':
         raise IOError('Invalid response from bootloader')
 
-    # @todo: unescape DLE characters
-    return response[2:-1]
+    response = unescape(response[1:-1])
+
+    # Verify SOH, EOT and command fields
+    if response[0] != command:
+        raise IOError('Invalid response from bootloader')
+    if crc16(response[:-2]) != response[-2:]:
+        raise IOError('Invalid CRC from bootloader')
+
+    response = response[1:-2]
+
+    return response
 
 def upload(serial, filename):
     with open(filename) as f:
         serial.write('\x01\x03')
         data = ''
         for line in f:
-            data += binascii.unhexlify(line[1:-1])
-        serial.write(escape(data))
+            data += line
+            serial.write(escape(line))
         serial.write(escape(crc16(data)))
         serial.write('\x04')
 
@@ -114,8 +140,8 @@ if __name__ == '__main__':
 
     if args.version:
         send_request(ser, '\x01')
-        version = read_response(ser, '\x01', 2)
-        print('Bootloader version: ' + version)
+        version = read_response(ser, '\x01')
+        print('Bootloader version: ' + binascii.hexlify(version))
 
     if args.erase:
         send_request(ser, '\x02')
@@ -123,6 +149,7 @@ if __name__ == '__main__':
 
     if args.upload != None:
         upload(ser, args.upload)
+        read_response(ser, '\x03')
 
     if args.check:
         print('Checking CRC is not yet implemented')
