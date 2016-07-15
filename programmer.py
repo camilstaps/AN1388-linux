@@ -10,18 +10,21 @@ import serial
 import argparse
 import binascii
 
-__author__ = "Camil Staps"
+__author__ = "Camil Staps, V Govorovski"
 __copyright__ = "Copyright 2015, Camil Staps"
 __credits__ = ["Camil Staps", 
-                "Ganapathi Ramachandra (Microchip Technology Inc.)"]
+                "Ganapathi Ramachandra (Microchip Technology Inc.)",
+                "Vadim Govorovski (Interface Devices Ltd.)"]
 __license__ = "GPL"
-__version__ = "0.1"
+__version__ = "0.2"
 __maintainer__ = "Camil Staps"
 __email__ = "info@camilstaps.nl"
 __status__ = "Development"
 
 crc_table = [0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7, 
         0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1c1, 0xf1ef]
+
+_debug_level = 0
 
 def crc16(data):
     """Calculate the CRC-16 for a string"""
@@ -33,7 +36,8 @@ def crc16(data):
         i = (crc >> 12) ^ (ord(c) >> 0)
         crc = crc_table[i & 0x0f] ^ (crc << 4)
 
-    return chr((crc >> 8) & 0xff) + chr(crc & 0xff)
+    return chr(crc & 0xff) + chr((crc >> 8) & 0xff)
+#    return chr((crc >> 8) & 0xff) + chr(crc & 0xff)
 
 def parse_args():
     pars = argparse.ArgumentParser()
@@ -62,6 +66,10 @@ def parse_args():
     pars.add_argument('-b', '--baud',
             help='Baudrate to the bootloader',
             type=int, default=115200)
+
+    pars.add_argument('-D', '--debug',
+            help='Debug level',
+            type=int, default=0)
 
     pars.add_argument('--my-version', 
             action='version', 
@@ -96,17 +104,23 @@ def send_request(serial, command, wait=True):
     # Build and send request
     request = '\x01' + command + escape(crc16(command)) + '\x04'
     serial.write(request)
+    if _debug_level >= 2:
+        print('>', binascii.hexlify(request))
 
 def read_response(serial, command):
     """Read the response from the serial port"""
     response = ''
     r = ser.read(1)
+    if r is None:
+        raise IOError('Response timed out')
     while r != '\x01':
         r = ser.read(1)
     while r != '\x04' or len(response) == 0 or response[-1] == '\x10':
         response += r
         r = ser.read(1)
     response += r
+    if _debug_level >= 2:
+        print('<', binascii.hexlify(response))
 
     if response[0] != '\x01' or response[-1] != '\x04':
         raise IOError('Invalid response from bootloader')
@@ -125,13 +139,20 @@ def read_response(serial, command):
 
 def upload(serial, filename):
     with open(filename) as f:
-        serial.write('\x01\x03')
-        data = ''
         for line in f:
-            data += line
-            serial.write(escape(line))
-        serial.write(escape(crc16(data)))
-        serial.write('\x04')
+            # Check Intel HEX format
+            if len(line) < 7:
+                raise IOError('Invalid record format')
+            if _debug_level >= 1:
+                print(line)
+            else:
+                sys.stdout.write('.')
+                sys.stdout.flush()
+            # Convert from ASCII to hexdec
+            data = binascii.unhexlify(line[1:-1])
+            send_request(serial, '\x03'+data)
+            read_response(serial, '\x03')
+        print('*')
 
 if __name__ == '__main__':
     args = parse_args()
@@ -139,21 +160,27 @@ if __name__ == '__main__':
     ser = serial.Serial(args.port, args.baud, timeout=1)
 
     if args.version:
+        print('Querying..')
         send_request(ser, '\x01')
         version = read_response(ser, '\x01')
         print('Bootloader version: ' + binascii.hexlify(version))
 
     if args.erase:
+        print('Erasing..')
         send_request(ser, '\x02')
         read_response(ser, '\x02')
+        print('Done')
 
     if args.upload != None:
+        print('Uploading..')
         upload(ser, args.upload)
-        read_response(ser, '\x03')
+        print('Done')
 
     if args.check:
         print('Checking CRC is not yet implemented')
 
     if args.run:
+        print('Run Application')
         send_request(ser, '\x05')
-
+    
+    print('Done.')
