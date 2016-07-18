@@ -137,7 +137,7 @@ def read_response(serial, command):
 
     return response
 
-def upload(serial, filename):
+def upload(serial, filename): 
     with open(filename) as f:
         for line in f:
             # Check Intel HEX format
@@ -156,7 +156,7 @@ def upload(serial, filename):
 
 if __name__ == '__main__':
     args = parse_args()
-
+    _debug_level = args.debug
     ser = serial.Serial(args.port, args.baud, timeout=1)
 
     if args.version:
