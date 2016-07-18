@@ -106,19 +106,19 @@ def send_request(serial, command, wait=True):
     serial.write(request)
     if _debug_level >= 2:
         print('>', binascii.hexlify(request))
+    return len(request)
 
 def read_response(serial, command):
     """Read the response from the serial port"""
     response = ''
-    r = ser.read(1)
-    if r is None:
-        raise IOError('Response timed out')
-    while r != '\x01':
+    while len(response) < 4 \
+          or response[-1] != '\x04' or response[-2]=='\x10':
         r = ser.read(1)
-    while r != '\x04' or len(response) == 0 or response[-1] == '\x10':
-        response += r
-        r = ser.read(1)
-    response += r
+        if len(r) == 0:
+            raise IOError('Bootloader response timed out')
+        if r == '\x01' or len(response) > 0:
+            response += r
+    
     if _debug_level >= 2:
         print('<', binascii.hexlify(response))
 
@@ -129,15 +129,14 @@ def read_response(serial, command):
 
     # Verify SOH, EOT and command fields
     if response[0] != command:
-        raise IOError('Invalid response from bootloader')
+        raise IOError('Unexpected response type from bootloader')
     if crc16(response[:-2]) != response[-2:]:
         raise IOError('Invalid CRC from bootloader')
 
-    response = response[1:-2]
-
-    return response
+    return response[1:-2]
 
 def upload(serial, filename): 
+    txcount, rxcount, txsize, rxsize = 0, 0, 0, 0
     with open(filename) as f:
         for line in f:
             # Check Intel HEX format
@@ -150,9 +149,13 @@ def upload(serial, filename):
                 sys.stdout.flush()
             # Convert from ASCII to hexdec
             data = binascii.unhexlify(line[1:-1])
-            send_request(serial, '\x03'+data)
-            read_response(serial, '\x03')
+            txsize += send_request(serial, '\x03'+data)
+            response = read_response(serial, '\x03')
+            rxsize += (len(response)+4)
+            txcount += 1
+            rxcount += 1
         print('*')
+    return (txcount, txsize, rxcount, rxsize)
 
 if __name__ == '__main__':
     args = parse_args()
@@ -173,7 +176,8 @@ if __name__ == '__main__':
 
     if args.upload != None:
         print('Uploading..')
-        upload(ser, args.upload)
+        upstats = upload(ser, args.upload)
+        print('Transmitted: %d packets (%d bytes), Received: %d packets (%d bytes)' % upstats)
         print('Done')
 
     if args.check:
