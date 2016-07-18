@@ -37,7 +37,6 @@ def crc16(data):
         crc = crc_table[i & 0x0f] ^ (crc << 4)
 
     return chr(crc & 0xff) + chr((crc >> 8) & 0xff)
-#    return chr((crc >> 8) & 0xff) + chr(crc & 0xff)
 
 def parse_args():
     pars = argparse.ArgumentParser()
@@ -150,9 +149,8 @@ def upload(serial, filename):
                 sys.stdout.flush()
             # Convert from ASCII to hexdec
             data = binascii.unhexlify(line[1:-1])
-            send_request(serial, '\x03'+data)
+            send_request(serial, '\x03' + data)
             read_response(serial, '\x03')
-        print('*')
 
 if __name__ == '__main__':
     args = parse_args()
@@ -169,18 +167,16 @@ if __name__ == '__main__':
         print('Erasing..')
         send_request(ser, '\x02')
         read_response(ser, '\x02')
-        print('Done')
 
     if args.upload != None:
         print('Uploading..')
         upload(ser, args.upload)
-        print('Done')
 
     if args.check:
-        print('Checking CRC is not yet implemented')
+        print('Checking CRC is not yet implemented.')
 
     if args.run:
-        print('Run Application')
+        print('Running application..')
         send_request(ser, '\x05')
     
     print('Done.')
