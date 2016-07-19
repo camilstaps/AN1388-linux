@@ -16,7 +16,7 @@ __credits__ = ["Camil Staps",
                 "Ganapathi Ramachandra (Microchip Technology Inc.)",
                 "Vadim Govorovski (Interface Devices Ltd.)"]
 __license__ = "GPL"
-__version__ = "0.2"
+__version__ = "0.3"
 __maintainer__ = "Camil Staps"
 __email__ = "info@camilstaps.nl"
 __status__ = "Development"
@@ -46,9 +46,12 @@ def parse_args():
             help='Upload file to chip',
             metavar='firmware.hex')
     pars.add_argument('-c', '--check',
-            help='Check CRC',
-            metavar='firmware.hex',
+            help='Check CRC of a memory block ADDR:SIZE'+
+                 ' ADDR - 32 bit start address (hex)'+
+                 ' SIZE - 32 bit block length in bytes',
+            type=str, default='9d000000:000000ff',
             nargs='?')
+            #action='store_true')
     pars.add_argument('-e', '--erase',
             help='Erase before upload',
             action='store_true')
@@ -66,6 +69,10 @@ def parse_args():
     pars.add_argument('-b', '--baud',
             help='Baudrate to the bootloader',
             type=int, default=115200)
+
+    pars.add_argument('-t', '--timeout',
+            help='Timeout in seconds',
+            type=float, default=1.0)
 
     pars.add_argument('-D', '--debug',
             help='Debug level',
@@ -160,7 +167,7 @@ def upload(serial, filename):
 if __name__ == '__main__':
     args = parse_args()
     _debug_level = args.debug
-    ser = serial.Serial(args.port, args.baud, timeout=1)
+    ser = serial.Serial(args.port, args.baud, timeout=args.timeout)
 
     if args.version:
         print('Querying..')
@@ -180,8 +187,15 @@ if __name__ == '__main__':
         print('Transmitted: %d packets (%d bytes), Received: %d packets (%d bytes)' % upstats)
         print('Done')
 
-    if args.check:
-        print('Checking CRC is not yet implemented')
+    if args.check != None:
+        print('Verifying..')
+        addr, size = args.check.split(':')
+        addr, size = addr.zfill(8), size.zfill(8)
+        send_request(ser, '\x04'+binascii.unhexlify(addr)[::-1]+
+                                 binascii.unhexlify(size)[::-1])
+        checksum = read_response(ser, '\04')
+        print('CRC @%s[%s]: %s' % (addr, size, binascii.hexlify(checksum)))
+        #print('Checking CRC is not yet implemented')
 
     if args.run:
         print('Run Application')
