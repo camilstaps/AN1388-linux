@@ -6,8 +6,8 @@ from __future__ import print_function
 import sys
 
 import serial
-import argparse
-import binascii
+from argparse import ArgumentParser, RawTextHelpFormatter
+from binascii import hexlify, unhexlify
 
 __author__ = "Camil Staps, V Govorovski"
 __copyright__ = "Copyright 2015, Camil Staps"
@@ -16,7 +16,7 @@ __credits__ = [
     "Ganapathi Ramachandra (Microchip Technology Inc.)",
     "Vadim Govorovski (Interface Devices Ltd.)"]
 __license__ = "GPL"
-__version__ = "0.2"
+__version__ = "0.3"
 __maintainer__ = "Camil Staps"
 __email__ = "info@camilstaps.nl"
 __status__ = "Development"
@@ -41,7 +41,7 @@ def crc16(data):
 
 def parse_args():
     """Parse command line arguments"""
-    pars = argparse.ArgumentParser()
+    pars = ArgumentParser(formatter_class=RawTextHelpFormatter)
 
     pars.add_argument(
         '-u', '--upload',
@@ -49,8 +49,10 @@ def parse_args():
         metavar='firmware.hex')
     pars.add_argument(
         '-c', '--check',
-        help='Check CRC',
-        metavar='firmware.hex',
+        help='Check CRC of a memory block ADDR:SIZE\n'\
+             '  ADDR - 32 bit start address (hex)\n'\
+             '  SIZE - 32 bit block length in bytes',
+        type=str, default='9d000000:000000ff',
         nargs='?')
     pars.add_argument(
         '-e', '--erase',
@@ -74,6 +76,10 @@ def parse_args():
         '-b', '--baud',
         help='Baudrate to the bootloader',
         type=int, default=115200)
+    pars.add_argument(
+        '-t', '--timeout',
+        help='Timeout in seconds',
+        type=float, default=1.0)
 
     pars.add_argument(
         '-D', '--debug',
@@ -116,23 +122,22 @@ def send_request(port, command):
     request = '\x01' + command + escape(crc16(command)) + '\x04'
     port.write(request)
     if DEBUG_LEVEL >= 2:
-        print('>', binascii.hexlify(request))
+        print('>', hexlify(request))
+    return len(request)
 
 def read_response(port, command):
     """Read the response from the serial port"""
     response = ''
-    byte = port.read(1)
-    if byte is None:
-        raise IOError('Response timed out')
-    while byte != '\x01':
+    while len(response) < 4 \
+          or response[-1] != '\x04' or response[-2] == '\x10':
         byte = port.read(1)
-    while byte != '\x04' or len(response) == 0 or response[-1] == '\x10':
-        response += byte
-        byte = port.read(1)
-    response += byte
+        if len(byte) == 0:
+            raise IOError('Bootloader response timed out')
+        if byte == '\x01' or len(response) > 0:
+            response += byte
 
     if DEBUG_LEVEL >= 2:
-        print('<', binascii.hexlify(response))
+        print('<', hexlify(response))
 
     if response[0] != '\x01' or response[-1] != '\x04':
         raise IOError('Invalid response from bootloader')
@@ -141,16 +146,15 @@ def read_response(port, command):
 
     # Verify SOH, EOT and command fields
     if response[0] != command:
-        raise IOError('Invalid response from bootloader')
+        raise IOError('Unexpected response type from bootloader')
     if crc16(response[:-2]) != response[-2:]:
         raise IOError('Invalid CRC from bootloader')
 
-    response = response[1:-2]
-
-    return response
+    return response[1:-2]
 
 def upload(port, filename):
     """Upload a hexfile"""
+    txcount, rxcount, txsize, rxsize = 0, 0, 0, 0
     with open(filename) as hexfile:
         for line in hexfile:
             # Check Intel HEX format
@@ -162,9 +166,14 @@ def upload(port, filename):
                 sys.stdout.write('.')
                 sys.stdout.flush()
             # Convert from ASCII to hexdec
-            data = binascii.unhexlify(line[1:-1])
-            send_request(port, '\x03' + data)
-            read_response(port, '\x03')
+            data = unhexlify(line[1:-1])
+            txsize += send_request(port, '\x03' + data)
+            response = read_response(port, '\x03')
+            rxsize += len(response) + 4
+            txcount += 1
+            rxcount += 1
+        print('*')
+    return (txcount, txsize, rxcount, rxsize)
 
 def main():
     """Main programmer function"""
@@ -172,13 +181,13 @@ def main():
 
     args = parse_args()
     DEBUG_LEVEL = args.debug
-    ser = serial.Serial(args.port, args.baud, timeout=1)
+    ser = serial.Serial(args.port, args.baud, timeout=args.timeout)
 
     if args.version:
         print('Querying..')
         send_request(ser, '\x01')
         version = read_response(ser, '\x01')
-        print('Bootloader version: ' + binascii.hexlify(version))
+        print('Bootloader version: ' + hexlify(version))
 
     if args.erase:
         print('Erasing..')
@@ -187,10 +196,19 @@ def main():
 
     if args.upload != None:
         print('Uploading..')
-        upload(ser, args.upload)
+        upstats = upload(ser, args.upload)
+        print(
+            'Transmitted: %d packets (%d bytes), '\
+            'Received: %d packets (%d bytes)' % upstats)
 
-    if args.check:
-        print('Checking CRC is not yet implemented.')
+    if args.check != None:
+        print('Verifying..')
+        addr, size = args.check.split(':')
+        addr, size = addr.zfill(8), size.zfill(8)
+        send_request(
+            ser, '\x04' + unhexlify(addr)[::-1] + unhexlify(size)[::-1])
+        checksum = read_response(ser, '\04')
+        print('CRC @%s[%s]: %s' % (addr, size, hexlify(checksum)))
 
     if args.run:
         print('Running application..')
